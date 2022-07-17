@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/cactauz/lank/storage"
 	"github.com/google/uuid"
 )
 
@@ -97,12 +98,14 @@ var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 type genField struct {
 	name string
+	typ  storage.FieldType
 	gen  func() any
 }
 
 func idField(name string) genField {
 	return genField{
 		name: name,
+		typ:  storage.FieldTypeString,
 		gen: func() any {
 			bs, _ := uuid.New().MarshalBinary()
 			return bs
@@ -114,6 +117,7 @@ func floatField(name string, min, max float64, nullPct float64) genField {
 	diff := max - min
 	return genField{
 		name: name,
+		typ:  storage.FieldTypeFloat,
 		gen: func() any {
 			if nullPct != 0 && rng.Float64() < nullPct {
 				return nil
@@ -124,15 +128,30 @@ func floatField(name string, min, max float64, nullPct float64) genField {
 	}
 }
 
-func nValueField(name string, nValues int, nullPct float64) genField {
+func bitmappedField(name string, nValues int, nullPct float64) genField {
 	return genField{
 		name: name,
+		typ:  storage.FieldTypeBitmapped,
 		gen: func() any {
 			if nullPct != 0 && rng.Float64() < nullPct {
 				return nil
 			}
 
 			return "value_" + strconv.Itoa(rng.Intn(nValues)+1)
+		},
+	}
+}
+
+func uint8Field(name string, maxValue int, nullPct float64) genField {
+	return genField{
+		name: name,
+		typ:  storage.FieldTypeUintBits,
+		gen: func() any {
+			if nullPct != 0 && rng.Float64() < nullPct {
+				return nil
+			}
+
+			return rng.Intn(maxValue) % 256
 		},
 	}
 }
@@ -151,30 +170,47 @@ func rowGenerator(fields []genField) func() row {
 	}
 }
 
-var rowRes row
-
-func BenchmarkGen(b *testing.B) {
+func TestInsertData(t *testing.T) {
 	fields := []genField{
 		idField("id"),
 		floatField("wts", .75, 1.25, 0),
-		nValueField("age", 99, 0),
-		nValueField("gdr", 5, 0),
-		nValueField("region", 10, 0),
-		nValueField("lang", 4, 0),
+		uint8Field("age", 99, 0),
+		bitmappedField("gdr", 5, 0),
+		bitmappedField("region", 10, 0),
+		bitmappedField("lang", 4, 0),
 	}
 
-	for i := 0; i < 14000; i++ {
-		field := nValueField(fmt.Sprintf("question_%d", i), 5, .95)
+	for i := 0; i < 15000; i++ {
+		field := bitmappedField(fmt.Sprintf("question_%d", i), 6, .95)
 		fields = append(fields, field)
 	}
 
 	gen := rowGenerator(fields)
 
-	b.ResetTimer()
+	fieldInfos := make([]storage.FieldInfo, 0, len(fields))
 
-	var rrow row
-	for i := 0; i < b.N; i++ {
-		rrow = gen()
+	for _, f := range fields {
+		fieldInfos = append(fieldInfos, storage.FieldInfo{
+			Name:            f.name,
+			Type:            f.typ,
+			CardinalityHint: 6,
+		})
 	}
-	rowRes = rrow
+
+	cs, err := storage.CreateColumnSet(fieldInfos)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 1000000; i++ {
+		row := gen()
+		err := cs.InsertRow(i, row)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if i%10000 == 0 {
+			fmt.Println(i)
+		}
+	}
 }
