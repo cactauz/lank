@@ -10,18 +10,17 @@ import (
 )
 
 type columnSet struct {
-	fields []FieldInfo
+	fields  []FieldInfo
+	sfields []storedField
 
-	kvFields map[string]struct{}
-	kvStore  *kvStore
-	rbFields map[string]storedField
+	kvStore *kvStore
 }
 
 func CreateColumnSet(fields []FieldInfo) (*columnSet, error) {
 	cs := &columnSet{
-		fields:   fields,
-		kvFields: make(map[string]struct{}, len(fields)),
-		rbFields: make(map[string]storedField, len(fields)),
+		fields:  fields,
+		sfields: make([]storedField, 0, len(fields)),
+		kvStore: &kvStore{},
 	}
 	err := cs.init()
 	if err != nil {
@@ -39,67 +38,57 @@ func (cs *columnSet) init() error {
 		case FieldTypeUnknown:
 			return fmt.Errorf("unknown field type for field %q", field.Name)
 		case FieldTypeBitmapped:
-			cs.rbFields[field.Name] = newBitField(field.CardinalityHint)
+			cs.sfields = append(cs.sfields, newBitField(field.CardinalityHint))
 		case FieldTypeUintBits:
 			// TODO: actually configure num bits or grow automatically
-			cs.rbFields[field.Name] = newUintField(8)
+			cs.sfields = append(cs.sfields, newUintField(8))
 		default:
-			cs.kvFields[field.Name] = struct{}{}
+			cs.sfields = append(cs.sfields, &kvWrapper{
+				field: field.Name,
+				store: cs.kvStore,
+			})
 			kvs = append(kvs, field)
 		}
 	}
 
-	var err error
-	cs.kvStore, err = initKVStore(kvs)
-	if err != nil {
-		return fmt.Errorf("init kv store: %w", err)
-	}
-	return nil
+	return cs.kvStore.init(kvs)
 }
 
-func (cs *columnSet) InsertRow(id int, row []any) error {
+type kvWrapper struct {
+	field string
+	store *kvStore
+}
+
+func (kv *kvWrapper) insert(id uint32, value any) error {
+	return kv.store.insert(id, kv.field, value)
+}
+
+func (kv *kvWrapper) get(id uint32) (any, error) {
+	return kv.store.get(id, kv.field)
+}
+
+func (cs *columnSet) InsertRow(id uint32, row []any) error {
 	for i, v := range row {
-		field := cs.fields[i]
-		if _, ok := cs.kvFields[field.Name]; ok {
-			err := cs.kvStore.insert(id, field.Name, v)
-			if err != nil {
-				return err
-			}
+		if v == nil {
 			continue
 		}
 
-		if f, ok := cs.rbFields[field.Name]; ok {
-			err := f.insert(id, v)
-			if err != nil {
-				return err
-			}
-			continue
+		err := cs.sfields[i].insert(id, v)
+		if err != nil {
+			return err
 		}
-
-		return fmt.Errorf("????")
 	}
 
 	return nil
 }
 
-func (cs *columnSet) GetRow(id int) ([]any, error) {
+func (cs *columnSet) GetRow(id uint32) ([]any, error) {
 	row := make([]any, len(cs.fields))
-	for i, field := range cs.fields {
+	for i, field := range cs.sfields {
 		var err error
-		if _, ok := cs.kvFields[field.Name]; ok {
-			row[i], err = cs.kvStore.get(id, field.Name)
-			if err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		if f, ok := cs.rbFields[field.Name]; ok {
-			row[i], err = f.get(id)
-			if err != nil {
-				return nil, err
-			}
-			continue
+		row[i], err = field.get(id)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -127,10 +116,10 @@ type kvStore struct {
 	fields map[string]kvField
 }
 
-func initKVStore(fields []FieldInfo) (*kvStore, error) {
+func (kv *kvStore) init(fields []FieldInfo) error {
 	db, err := leveldb.Open(ldbstorage.NewMemStorage(), nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	fm := make(map[string]kvField)
@@ -142,23 +131,22 @@ func initKVStore(fields []FieldInfo) (*kvStore, error) {
 		case FieldTypeString:
 			fm[field.Name] = stringField{}
 		default:
-			return nil, fmt.Errorf("unsupported type %q for kv store", field.Type)
+			return fmt.Errorf("unsupported type %q for kv store", field.Type)
 		}
 	}
 
-	return &kvStore{
-		db:     db,
-		fields: fm,
-	}, nil
+	kv.db = db
+	kv.fields = fm
+	return nil
 }
 
-func (k *kvStore) insert(id int, field string, value any) error {
+func (k *kvStore) insert(id uint32, field string, value any) error {
 	enc := k.fields[field].enc
 	key := fmt.Sprintf("%d:%s", id, field)
 	return k.db.Put([]byte(key), enc(value), nil)
 }
 
-func (k *kvStore) get(id int, field string) (any, error) {
+func (k *kvStore) get(id uint32, field string) (any, error) {
 	dec := k.fields[field].dec
 	key := fmt.Sprintf("%d:%s", id, field)
 	res, err := k.db.Get([]byte(key), nil)

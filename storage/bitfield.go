@@ -6,14 +6,19 @@ import (
 
 type fieldStore interface {
 	init([]FieldInfo) error
-	insert(fieldName string, id int, value any) error
-	get(fieldName string, id int) (any, error)
+	insert(fieldName string, id uint32, value any) error
+	get(fieldName string, id uint32) (any, error)
 }
 
 type storedField interface {
-	insert(id int, value any) error
-	get(id int) (any, error)
+	insert(id uint32, value any) error
+	get(id uint32) (any, error)
 }
+
+var (
+	_ storedField = &uintField{}
+	_ storedField = &bitField{}
+)
 
 // type bitFieldStore struct {
 // 	fieldIndexes map[string]int
@@ -72,32 +77,31 @@ func newBitField(cardinalityHint int) *bitField {
 	}
 }
 
-func (bf *bitField) insert(id int, value any) error {
+func (bf *bitField) insert(id uint32, value any) error {
 	var idx int
 	var ok bool
 	if idx, ok = bf.valueIndexes[value]; !ok {
 		idx = len(bf.values)
+		bm := roaring.New()
 
 		bf.values = append(bf.values, value)
-		bf.valueBits = append(bf.valueBits, roaring.New())
+		bf.valueBits = append(bf.valueBits, bm)
 		bf.valueIndexes[value] = idx
 	}
 
-	bf.valueBits[idx].AddInt(id)
+	bf.valueBits[idx].Add(id)
 	return nil
 }
 
-func (bf *bitField) get(id int) (any, error) {
+func (bf *bitField) get(id uint32) (any, error) {
 	for idx, bs := range bf.valueBits {
-		if bs.ContainsInt(id) {
+		if bs.Contains(id) {
 			return bf.values[idx], nil
 		}
 	}
 
-	return "", nil
+	return nil, nil
 }
-
-var _ storedField = &uintField{}
 
 type uintField struct {
 	setBits *roaring.Bitmap
@@ -117,26 +121,26 @@ func newUintField(nBits int) *uintField {
 	return uf
 }
 
-func (uf *uintField) insert(id int, value any) error {
-	uf.setBits.AddInt(id)
+func (uf *uintField) insert(id uint32, value any) error {
+	uf.setBits.Add(id)
 	for i, rb := range uf.intBits {
 		mask := 1 << i
 		if value.(int)&mask == mask {
-			rb.AddInt(id)
+			rb.Add(id)
 		}
 	}
 
 	return nil
 }
 
-func (uf *uintField) get(id int) (any, error) {
-	if !uf.setBits.ContainsInt(id) {
+func (uf *uintField) get(id uint32) (any, error) {
+	if !uf.setBits.Contains(id) {
 		return nil, nil
 	}
 
 	var n int
 	for i, rb := range uf.intBits {
-		if rb.ContainsInt(id) {
+		if rb.Contains(id) {
 			n += 1 << i
 		}
 	}
