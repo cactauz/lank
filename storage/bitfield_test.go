@@ -1,43 +1,59 @@
 package storage
 
 import (
-	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func TestPrintBits(t *testing.T) {
-	printBits(0, 8)
-}
+func TestBitField(t *testing.T) {
+	t.Run("returns nil if not set", func(t *testing.T) {
+		bf := newBitField(0)
 
-func FuzzBitField(f *testing.F) {
+		v, err := bf.get(0)
+		assert.NoError(t, err)
+		assert.Nil(t, v)
+	})
 
-}
+	t.Run("doesnt store nils", func(t *testing.T) {
+		bf := newBitField(0)
 
-func printBits(v int, nBits int) {
-	if v >= 1<<nBits {
-		fmt.Println("2 big")
-		return
-	}
+		assert := assert.New(t)
+		err := bf.insert(1, nil)
+		assert.NoError(err)
 
-	res := make([]bool, nBits)
-	mask := 1
-	for i := 0; i < nBits; i++ {
-		if v&mask == mask {
-			res[i] = true
-		} else {
-			res[i] = false
+		v, err := bf.get(1)
+		assert.NoError(err)
+		assert.Nil(v)
+
+		assert.Len(bf.values, 0)
+		assert.Len(bf.valueIndexes, 0)
+	})
+
+	t.Run("inserts and retrieves values", func(t *testing.T) {
+		assert := assert.New(t)
+		bf := newBitField(5)
+
+		for _, s := range []struct {
+			id uint32
+			v  any
+		}{
+			{0, "a"},
+			{1, "b"},
+			{2, "c"},
+			{3, "d"},
+			{4, 4},
+			{5, "a"},
+			{6, complex64(2 + 1i)},
+		} {
+			assert.NoError(bf.insert(s.id, s.v))
+
+			v, err := bf.get(s.id)
+			assert.NoError(err)
+			assert.EqualValues(s.v, v)
 		}
-		mask <<= 1
-	}
 
-	fmt.Println(res)
-
-	var n int
-	for i, b := range res {
-		if b {
-			n += 1 << i
-		}
-	}
-
-	fmt.Println(n)
+		assert.Len(bf.values, 6)
+		assert.Len(bf.valueIndexes, 6)
+	})
 }
