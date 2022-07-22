@@ -28,6 +28,8 @@ func (kv *kvStore) init(fields []FieldInfo) error {
 			fm[field.Name] = floatField{}
 		case FieldTypeString:
 			fm[field.Name] = stringField{}
+		case FieldTypeBytes:
+			fm[field.Name] = bytesField{}
 		default:
 			return fmt.Errorf("unsupported type %q for kv store", field.Type)
 		}
@@ -76,9 +78,21 @@ type stringField struct {
 }
 
 func (stringField) enc(v any) []byte {
-	return v.([]byte)
+	return []byte(v.(string))
 }
 
 func (stringField) dec(v []byte) any {
 	return string(v)
+}
+
+type bytesField struct {
+	kvField
+}
+
+func (bytesField) enc(v any) []byte {
+	return v.([]byte)
+}
+
+func (bytesField) dec(v []byte) any {
+	return v
 }

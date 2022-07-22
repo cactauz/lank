@@ -11,6 +11,7 @@ const (
 	FieldTypeBitmapped
 	FieldTypeUintBits
 	FieldTypeFloat
+	FieldTypeBytes
 	FieldTypeString
 	FieldTypeTimestamp
 )

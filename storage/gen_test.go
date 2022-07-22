@@ -37,51 +37,64 @@ func genIdField(name string) genField {
 		name: name,
 		typ:  FieldTypeString,
 		gen: func() any {
-			bs, _ := uuid.New().MarshalBinary()
-			return bs
+			return uuid.NewString()
 		},
 	}
 }
 
-func genFloatField(name string, min, max float64, nullPct float64) genField {
+func sparseField(nullPct float64, gen genField) genField {
+	return genField{
+		name: gen.name,
+		typ:  gen.typ,
+		gen: func() any {
+			if nullPct != 0 && rng.Float64() < nullPct {
+				return nil
+			}
+
+			return gen.gen()
+		},
+	}
+}
+
+func genFloatField(name string, min, max float64) genField {
 	diff := max - min
 	return genField{
 		name: name,
 		typ:  FieldTypeFloat,
 		gen: func() any {
-			if nullPct != 0 && rng.Float64() < nullPct {
-				return nil
-			}
-
 			return rng.Float64()*diff + min
 		},
 	}
 }
 
-func genBitmappedField(name string, nValues int, nullPct float64) genField {
+func genBitmappedField(name string, nValues int) genField {
 	return genField{
 		name: name,
 		typ:  FieldTypeBitmapped,
 		gen: func() any {
-			if nullPct != 0 && rng.Float64() < nullPct {
-				return nil
-			}
-
 			return strconv.Itoa(rng.Intn(nValues) + 1)
 		},
 	}
 }
 
-func genIntField(name string, maxValue int, nullPct float64) genField {
+func genIntField(name string, maxValue int) genField {
 	return genField{
 		name: name,
 		typ:  FieldTypeUintBits,
 		gen: func() any {
-			if nullPct != 0 && rng.Float64() < nullPct {
-				return nil
-			}
-
 			return rng.Intn(maxValue) % 256
+		},
+	}
+}
+
+func genBytesField(name string, minLength, maxLength int) genField {
+	return genField{
+		name: name,
+		typ:  FieldTypeBytes,
+		gen: func() any {
+			bs := make([]byte, rand.Intn(maxLength-minLength)+minLength)
+			rng.Read(bs)
+			return bs
 		},
 	}
 }
@@ -98,4 +111,12 @@ func rowGenerator(fields []genField) func() row {
 
 		return row
 	}
+}
+
+func genRows(n int, gen func() row) [][]any {
+	rows := make([][]any, 0, n)
+	for i := 0; i < n; i++ {
+		rows = append(rows, gen())
+	}
+	return rows
 }
